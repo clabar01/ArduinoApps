@@ -46,7 +46,7 @@ Tuning constants are at the top of `python/main.py`:
 | Constant | Default | Meaning |
 |----------|---------|---------|
 | `COLOR` | `"green"` | which minifig: topic `ME193/ceci/green` or `ME193/ceci/blue` |
-| `TARGET_X` | `0.5` | `x` position the car stops at |
+| `TARGET_X` | `1 / 3` | `x` position the car stops at |
 | `CENTER_TOLERANCE` | `0.015` | stop band around the target |
 | `RESTART_TOLERANCE` | `0.03` | once stopped, move again only beyond this |
 | `KP` | `120` | speed per unit of error; lower = gentler approach |
