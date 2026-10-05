@@ -1,5 +1,5 @@
 name: Minifig Tracker
 icon: 🟢
-description: Subscribes to MQTT ME193/ceci/green and shows the minifig's x/y position as a single dot on the LED matrix.
+description: Subscribes to MQTT ME193/ceci/<color>, shows the minifig as a dot on the LED matrix, and drives the car until the minifig is at TARGET_X.
 ports: []
 bricks: []

@@ -8,8 +8,12 @@ from arduino.app_utils import App, Bridge, Logger
 
 logger = Logger("minifig_tracker")
 
+# --- Which minifig and where to stop -----------------------------------------
+COLOR = "green"           # "green" or "blue": subscribes to ME193/ceci/<COLOR>
+TARGET_X = 0.5            # x position the car stops at (same units as x, 0..X_MAX)
+
 # --- Centering tuning --------------------------------------------------------
-# PD control on error = x - CENTER_X. Each message computes
+# PD control on error = x - TARGET_X. Each message computes
 #   u = KP * error + KD * d(error)/dt
 # and asks for speed |u| (capped at MAX_DRIVE_SPEED) in the direction that
 # shrinks the error. When the D term outweighs the P term (the minifig is
@@ -17,7 +21,6 @@ logger = Logger("minifig_tracker")
 # The motors can't run slower than MIN_DRIVE_SPEED, so a request below it is
 # made in bursts: drive at MIN_DRIVE_SPEED for (request / MIN_DRIVE_SPEED) of
 # every PULSE_PERIOD_S. Near the center the car creeps in short nudges.
-CENTER_X = 0.5            # target x (same units as the incoming x, 0..X_MAX)
 CENTER_TOLERANCE = 0.015  # stop when |error| <= this (about 10 px at 640 wide)
 RESTART_TOLERANCE = 0.03  # once stopped, only move again when |error| > this
 KP = 120.0                # speed per unit of error (error is about -0.5..0.5)
@@ -39,7 +42,9 @@ LOOP_PERIOD_S = 0.02      # how often the App loop applies the speed / checks ti
 
 MQTT_HOST = "broker.hivemq.com"
 MQTT_PORT = 1883
-MQTT_TOPIC = "ME193/ceci/green"
+if COLOR not in ("green", "blue"):
+    raise ValueError(f'COLOR must be "green" or "blue", not {COLOR!r}')
+MQTT_TOPIC = f"ME193/ceci/{COLOR}"
 
 # Range of the incoming x/y values (normalized by the detector). x in [0, X_MAX],
 # y in [0, Y_MAX], with y = 0 at the top. Adjust to match the publisher.
@@ -125,7 +130,7 @@ def reset_pd():
 def pd_speed(x: float, now: float) -> str:
     """Update target_speed from a new x (call with state_lock held). Returns a log string."""
     global target_speed, prev_error, prev_time, d_error, moving
-    error = x - CENTER_X
+    error = x - TARGET_X
 
     if prev_time is not None and 0 < now - prev_time < MESSAGE_TIMEOUT_S:
         raw = (error - prev_error) / (now - prev_time)

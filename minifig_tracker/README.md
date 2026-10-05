@@ -1,6 +1,7 @@
 # 🟢 Minifig Tracker
 
-Subscribes to `ME193/ceci/green` on `broker.hivemq.com` and lights one pixel on the
+Subscribes to `ME193/ceci/<COLOR>` (`COLOR` = `green` or `blue`, set at the top of
+`python/main.py`; default `green`) on `broker.hivemq.com` and lights one pixel on the
 8×13 LED matrix at the scaled `x`/`y` position. Clears the matrix when `detected` is false.
 
 Expected payload (JSON):
@@ -33,8 +34,8 @@ wiring and direction.
 ## Centering (PD control)
 
 The car drives forward or backward until the minifig's `x` is within
-`CENTER_X ± CENTER_TOLERANCE`, then stops. Each MQTT message computes
-`u = KP·error + KD·d(error)/dt` (with `error = x − CENTER_X`) and asks for speed
+`TARGET_X ± CENTER_TOLERANCE`, then stops. Each MQTT message computes
+`u = KP·error + KD·d(error)/dt` (with `error = x − TARGET_X`) and asks for speed
 `|u|` toward the center. If the D term outweighs the P term (approaching fast), the
 car coasts. TT motors stall below `MIN_DRIVE_SPEED`, so smaller requests are
 made as bursts at `MIN_DRIVE_SPEED` — near the center the car creeps in short
@@ -44,7 +45,8 @@ Tuning constants are at the top of `python/main.py`:
 
 | Constant | Default | Meaning |
 |----------|---------|---------|
-| `CENTER_X` | `0.5` | target `x` |
+| `COLOR` | `"green"` | which minifig: topic `ME193/ceci/green` or `ME193/ceci/blue` |
+| `TARGET_X` | `0.5` | `x` position the car stops at |
 | `CENTER_TOLERANCE` | `0.015` | stop band around the target |
 | `RESTART_TOLERANCE` | `0.03` | once stopped, move again only beyond this |
 | `KP` | `120` | speed per unit of error; lower = gentler approach |
