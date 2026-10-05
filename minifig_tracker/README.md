@@ -30,18 +30,30 @@ spins the wrong way, flip its `invert` flag there (and in `motor_test`). The Pyt
 app sends `set_speed(0)` when it stops. Run the separate `motor_test` app to check
 wiring and direction.
 
-## Centering (Phase 3)
+## Centering (PD control)
 
 The car drives forward or backward until the minifig's `x` is within
-`CENTER_X ± CENTER_TOLERANCE`, then stops. Tuning constants are at the top of
-`python/main.py`:
+`CENTER_X ± CENTER_TOLERANCE`, then stops. Each MQTT message computes
+`u = KP·error + KD·d(error)/dt` (with `error = x − CENTER_X`) and asks for speed
+`|u|` toward the center. If the D term outweighs the P term (approaching fast), the
+car coasts. TT motors stall below `MIN_DRIVE_SPEED`, so smaller requests are
+made as bursts at `MIN_DRIVE_SPEED` — near the center the car creeps in short
+nudges. Every start and burst begins with a short kick at `KICK_SPEED`.
+
+Tuning constants are at the top of `python/main.py`:
 
 | Constant | Default | Meaning |
 |----------|---------|---------|
 | `CENTER_X` | `0.5` | target `x` |
-| `CENTER_TOLERANCE` | `0.05` | stop band around the target |
-| `DRIVE_SPEED` | `80` | speed while moving (0..100) |
-| `MIN_DRIVE_SPEED` | `70` | `DRIVE_SPEED` is never used below this |
+| `CENTER_TOLERANCE` | `0.015` | stop band around the target |
+| `RESTART_TOLERANCE` | `0.03` | once stopped, move again only beyond this |
+| `KP` | `120` | speed per unit of error; lower = gentler approach |
+| `KD` | `40` | damping; raise if it overshoots |
+| `D_SMOOTHING` | `0.8` | low-pass on the derivative (1 = none) |
+| `MIN_DRIVE_SPEED` | `55` | slowest speed the motors keep turning at |
+| `MAX_DRIVE_SPEED` | `80` | top speed far from the center |
+| `PULSE_PERIOD_S` | `0.5` | burst cycle for requests below `MIN_DRIVE_SPEED` |
+| `KICK_SPEED` / `KICK_TIME_S` | `80` / `0.15` | start-up kick; `KICK_TIME_S = 0` disables |
 | `FORWARD_INCREASES_X` | `True` | driving forward makes `x` increase; flip if the car runs away from the center |
 | `MESSAGE_TIMEOUT_S` | `1.0` | stop if no MQTT message for this long |
 
