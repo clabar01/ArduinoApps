@@ -1,0 +1,5 @@
+name: Minifig Tracker
+icon: 🟢
+description: Subscribes to MQTT ME193/ceci/green and shows the minifig's x/y position as a single dot on the LED matrix.
+ports: []
+bricks: []
