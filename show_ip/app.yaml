@@ -1,0 +1,5 @@
+name: Show IP
+icon: 🌐
+description: Scrolls the board's WiFi IP address across the LED matrix.
+ports: []
+bricks: []
