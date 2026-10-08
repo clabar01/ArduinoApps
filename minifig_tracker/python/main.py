@@ -10,7 +10,7 @@ logger = Logger("minifig_tracker")
 
 # --- Which minifig and where to stop -----------------------------------------
 COLOR = "green"           # "green" or "blue": subscribes to ME193/ceci/<COLOR>
-TARGET_X = 1 / 3          # x position the car stops at (same units as x, 0..X_MAX)
+TARGET_X = 1 / 5          # x position the car stops at (same units as x, 0..X_MAX)
 
 # --- Centering tuning --------------------------------------------------------
 # PD control on error = x - TARGET_X. Each message computes
