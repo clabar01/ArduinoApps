@@ -1,0 +1,4 @@
+# ignore app cache folder
+.cache/
+__pycache__/
+imu_debug_*.csv
