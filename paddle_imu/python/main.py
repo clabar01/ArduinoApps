@@ -6,6 +6,11 @@ must both pass) and publishes ONE MQTT message per swing to IMU_TOPIC, never
 the raw samples:
     {"swing": 1, "peak": <peak accel g>, "unit": "g", "peak_gyro": <deg/s>,
      "t": <swing start, Unix time s>}
+It also shows the game on the LED matrix (matrix_display.py): it subscribes
+to GAME_TOPIC and draws the ball as a dot while PLAYING, the level or streak
+otherwise, and the board's IP when no game messages arrive for 3 s. (The
+board runs one app at a time, so the IMU and the display share this app.)
+
 Moves that started like a swing but failed a check go to IMU_REJECTED_TOPIC
 instead (same fields, "swing": 0, plus "failed"), so they can be seen while
 tuning without the game ever treating them as swings.
@@ -19,12 +24,15 @@ batches of 10, to IMU_RAW_TOPIC, so the laptop can record labeled swings
 (tools/record_swings.py). IMU_TOPIC itself only ever carries swing events.
 """
 import csv
+import ipaddress
 import json
+import os
 import time
 
 import paho.mqtt.client as mqtt
 
 from arduino.app_utils import App, Bridge, Logger
+from matrix_display import MatrixDisplay
 from swing_detector import SwingDetector
 
 logger = Logger("paddle_imu")
@@ -50,6 +58,11 @@ MQTT_HOST = "broker.hivemq.com"
 MQTT_PORT = 1883
 IMU_TOPIC = "ME193/CeciLaBarge/imu"
 IMU_REJECTED_TOPIC = "ME193/CeciLaBarge/imu/rejected"   # near misses, for tuning
+GAME_TOPIC = "ME193/CeciLaBarge/game"   # laptop -> here: game state + ball, for the LED matrix
+
+# --- LED matrix ---------------------------------------------------------------
+DISPLAY_PERIOD_S = 0.05             # redraw check rate (the game sends ~10 msgs/s)
+HOST_IP_FILE = "/app/host_ip.txt"   # written every minute by write_host_ip.sh (cron)
 IMU_RAW_TOPIC = "ME193/CeciLaBarge/imu/raw"   # DEBUG only: raw samples for labeling
 RAW_BATCH = 10                                 # samples per raw message (10 msgs/s)
 
@@ -79,7 +92,71 @@ if DEBUG:
 def on_connect(client, userdata, flags, reason_code, properties):
     global mqtt_connected
     mqtt_connected = not reason_code.is_failure
-    logger.info(f"MQTT: connected to {MQTT_HOST} ({reason_code}); publishing swings to {IMU_TOPIC}")
+    if mqtt_connected:
+        client.subscribe(GAME_TOPIC)
+    logger.info(f"MQTT: connected to {MQTT_HOST} ({reason_code}); publishing swings to {IMU_TOPIC}, "
+                f"listening to {GAME_TOPIC}")
+
+
+def on_message(client, userdata, msg):
+    """Game state from the laptop -> the display logic (no drawing here)."""
+    try:
+        display.on_game(json.loads(msg.payload), time.monotonic())
+    except (ValueError, TypeError):
+        logger.warning(f"Ignoring bad game message: {msg.payload[:80]!r}")
+
+
+# --- LED matrix ---------------------------------------------------------------
+display = MatrixDisplay()
+last_shown = None
+
+
+def valid_ip(text: str):
+    """text if it's a usable IPv4 address, else None (as in show_ip)."""
+    try:
+        ip = ipaddress.IPv4Address(text.strip())
+    except ValueError:
+        return None
+    return None if (ip.is_loopback or ip.is_link_local or ip.is_unspecified) else str(ip)
+
+
+def get_ip() -> str:
+    """The board's WiFi IP (as in show_ip): the cron-written file if present
+    (it follows WiFi changes), else HOST_IP from App Lab (fixed at app start)."""
+    try:
+        with open(HOST_IP_FILE) as f:
+            return valid_ip(f.read()) or "no IP"
+    except OSError:
+        return valid_ip(os.environ.get("HOST_IP", "")) or "no IP"
+
+
+_logged_text = [None]
+
+
+def display_text_changed() -> bool:
+    if display.current_text != _logged_text[0]:
+        _logged_text[0] = display.current_text
+        return True
+    return False
+
+
+def display_loop():
+    """App loop: draw what matrix_display says, only when it changes."""
+    global last_shown
+    what = display.what_to_show(time.monotonic(), get_ip())
+    if what != last_shown:
+        try:
+            if what[0] == "dot":
+                Bridge.call("show_dot", what[1], what[2])
+            else:
+                Bridge.call("show_frame", "".join(f"{r:04X}" for r in what[1]))
+            text_changed = what[0] == "rows" and display_text_changed()
+            if last_shown is None or what[0] != last_shown[0] or text_changed:
+                logger.info(f"display: {'ball dot' if what[0] == 'dot' else repr(display.current_text)}")
+            last_shown = what
+        except Exception as e:
+            logger.warning(f"Bridge call failed: {e}")
+    time.sleep(DISPLAY_PERIOD_S)
 
 
 def on_disconnect(client, userdata, flags, reason_code, properties):
@@ -145,6 +222,7 @@ def imu_status(text: str):
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 client.on_connect = on_connect
 client.on_disconnect = on_disconnect
+client.on_message = on_message
 client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=30)
 client.loop_start()   # background thread; reconnects automatically
 
@@ -152,7 +230,7 @@ Bridge.provide("imu_sample", imu_sample)
 Bridge.provide("imu_status", imu_status)
 
 try:
-    App.run()
+    App.run(user_loop=display_loop)
 finally:
     client.loop_stop()
     client.disconnect()

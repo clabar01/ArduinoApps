@@ -2,3 +2,5 @@
 .cache/
 __pycache__/
 imu_debug_*.csv
+host_ip.txt
+host_ip.tmp

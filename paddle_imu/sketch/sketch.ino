@@ -1,4 +1,5 @@
-// paddle_imu: reads an MPU6050 (GY-521) at 100 Hz and sends every sample to Python.
+// paddle_imu: reads an MPU6050 (GY-521) at 100 Hz and sends every sample to Python,
+// and shows the game on the LED matrix.
 //
 // The sensor lives on the microcontroller's I2C pins, so the sketch does the
 // reading (steady timing, no Linux in the way); Python only receives and logs.
@@ -6,6 +7,15 @@
 // Bridge messages to Python:
 //  - "imu_sample" (t_ms, ax, ay, az, gx, gy, gz)  accel in g, gyro in deg/s
 //  - "imu_status" (text)                           which bus/address, or a scan
+//
+// It also drives the 8x13 LED matrix for the game display (Python decides
+// what to show; same Bridge pattern as minifig_tracker):
+//  - "show_dot"     (col, row) -> lights exactly one pixel (the ball)
+//  - "show_frame"   (rows)     -> 8 rows as 32 hex chars (4 per row, 13 bits,
+//                                 bit 12 = leftmost column): text / numbers
+//  - "clear_matrix" ()         -> turns every pixel off
+// The board runs one app at a time, so the IMU and the display share this app.
+// Matrix writes happen in the Bridge thread and never block the 100 Hz IMU loop.
 //
 // No library: the MPU6050 needs two register writes to set up and one 14-byte
 // read per sample, which plain Wire does. (Adafruit_MPU6050 drags in two more
@@ -18,8 +28,10 @@
 // The sketch tries all three, at 0x68 (AD0 low) and 0x69 (AD0 high). If the
 // sensor isn't found it scans every bus, reports what answered, and retries.
 
+#include <Arduino_LED_Matrix.h>
 #include <Arduino_RouterBridge.h>
 #include <Wire.h>
+#include <zephyr/kernel.h>
 
 static const unsigned long SAMPLE_PERIOD_US = 10000;  // 100 Hz
 static const unsigned long STATUS_PERIOD_MS = 5000;   // re-send status (Python may start late)
@@ -52,6 +64,46 @@ static Bus BUSES[] = {{&Wire, "Wire (header SDA/SCL)"},
 static const int NUM_BUSES = sizeof(BUSES) / sizeof(BUSES[0]);
 static const uint8_t ADDRESSES[] = {0x68, 0x69};
 
+// --- LED matrix (from minifig_tracker) ------------------------------------
+// Dimensions from Arduino_LED_Matrix.h (canvasWidth = 13, canvasHeight = 8).
+static const int MATRIX_COLS = 13;
+static const int MATRIX_ROWS = 8;
+static const uint8_t DOT_BRIGHTNESS = 7;  // 3-bit grayscale: 0..7
+
+Arduino_LED_Matrix matrix;
+K_MUTEX_DEFINE(matrix_mtx);  // Bridge providers run on a separate thread
+static uint8_t frame[MATRIX_ROWS * MATRIX_COLS];  // row-major, one byte per pixel
+
+void show_dot(int col, int row) {
+  if (col < 0 || col >= MATRIX_COLS || row < 0 || row >= MATRIX_ROWS) return;
+  k_mutex_lock(&matrix_mtx, K_FOREVER);
+  memset(frame, 0, sizeof(frame));
+  frame[row * MATRIX_COLS + col] = DOT_BRIGHTNESS;
+  matrix.draw(frame);
+  k_mutex_unlock(&matrix_mtx);
+}
+
+void show_frame(String rows) {
+  if (rows.length() != MATRIX_ROWS * 4) return;
+  k_mutex_lock(&matrix_mtx, K_FOREVER);
+  for (int r = 0; r < MATRIX_ROWS; r++) {
+    unsigned long bits = strtoul(rows.substring(r * 4, r * 4 + 4).c_str(), nullptr, 16);
+    for (int c = 0; c < MATRIX_COLS; c++) {
+      frame[r * MATRIX_COLS + c] = (bits >> (MATRIX_COLS - 1 - c)) & 1 ? DOT_BRIGHTNESS : 0;
+    }
+  }
+  matrix.draw(frame);
+  k_mutex_unlock(&matrix_mtx);
+}
+
+void clear_matrix() {
+  k_mutex_lock(&matrix_mtx, K_FOREVER);
+  memset(frame, 0, sizeof(frame));
+  matrix.draw(frame);
+  k_mutex_unlock(&matrix_mtx);
+}
+
+// --- IMU ---------------------------------------------------------------------
 static TwoWire *imu_wire = nullptr;  // bus the sensor was found on
 static uint8_t imu_addr = 0;
 static String status_text = "starting";
@@ -126,7 +178,14 @@ static void scan_buses() {
 }
 
 void setup() {
+  matrix.begin();
+  matrix.setGrayscaleBits(3);
+  matrix.clear();
+
   Bridge.begin();
+  Bridge.provide("show_dot", show_dot);
+  Bridge.provide("show_frame", show_frame);
+  Bridge.provide("clear_matrix", clear_matrix);
   for (int b = 0; b < NUM_BUSES; b++) {
     BUSES[b].wire->begin();
     BUSES[b].wire->setClock(400000);
