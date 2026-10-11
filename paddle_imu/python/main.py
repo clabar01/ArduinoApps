@@ -15,8 +15,15 @@ Moves that started like a swing but failed a check go to IMU_REJECTED_TOPIC
 instead (same fields, "swing": 0, plus "failed"), so they can be seen while
 tuning without the game ever treating them as swings.
 
-MQTT setup is the same as minifig_tracker (broker.hivemq.com:1883, paho-mqtt
-2.1.0, connect_async + loop_start: connects and reconnects in the background).
+MQTT: two connections (paho-mqtt 2.1.0, connect_async + loop_start, as in
+minifig_tracker; both reconnect in the background):
+  - LOCAL: the Mosquitto broker running on this board (ArduinoApps/local_broker),
+    reached from inside this app's container as msgpack-rpc-router:1883. Fast:
+    swings reach the laptop over the local WiFi only.
+  - HIVEMQ: broker.hivemq.com, the fallback. The local broker bridges these
+    topics to hivemq, so either path reaches the laptop.
+Messages go out on LOCAL while it's connected, else on HIVEMQ. Game state is
+received on both (the display just shows the latest).
 
 DEBUG = True also (a) writes every sample to /app/imu_debug_<start time>.csv
 (on the board: ~/ArduinoApps/paddle_imu/) and (b) streams the raw samples, in
@@ -54,8 +61,8 @@ DEBUG = False
 DEBUG_LOG_EVERY = 10    # in DEBUG, also log every 10th sample (10 lines/s)
 
 # --- MQTT (same broker as the door-to-door minifig app) ----------------------
-MQTT_HOST = "broker.hivemq.com"
-MQTT_PORT = 1883
+LOCAL_BROKER = ("msgpack-rpc-router", 1883)   # Mosquitto on this board (host, seen from the container)
+HIVEMQ_BROKER = ("broker.hivemq.com", 1883)   # public fallback
 IMU_TOPIC = "ME193/CeciLaBarge/imu"
 IMU_REJECTED_TOPIC = "ME193/CeciLaBarge/imu/rejected"   # near misses, for tuning
 GAME_TOPIC = "ME193/CeciLaBarge/game"   # laptop -> here: game state + ball, for the LED matrix
@@ -71,7 +78,6 @@ STATUS_PERIOD_S = 5.0   # log sample rate + MQTT state this often
 detector = SwingDetector(START_G, MIN_ACCEL_PEAK_G, MIN_GYRO_PEAK_DPS,
                          REFRACTORY_S, PEAK_WINDOW_S, GYRO_LOOKBACK_S)
 raw_batch = []
-mqtt_connected = False
 swings = 0
 rejected = 0
 samples = 0
@@ -89,13 +95,47 @@ if DEBUG:
     logger.info(f"DEBUG: writing every sample to {csv_path}")
 
 
-def on_connect(client, userdata, flags, reason_code, properties):
-    global mqtt_connected
-    mqtt_connected = not reason_code.is_failure
-    if mqtt_connected:
-        client.subscribe(GAME_TOPIC)
-    logger.info(f"MQTT: connected to {MQTT_HOST} ({reason_code}); publishing swings to {IMU_TOPIC}, "
-                f"listening to {GAME_TOPIC}")
+class Broker:
+    """One MQTT connection (name, client, connected flag), reconnecting by itself."""
+
+    def __init__(self, name: str, host: str, port: int):
+        self.name, self.host, self.connected = name, host, False
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        self.client.on_connect = self._on_connect
+        self.client.on_disconnect = self._on_disconnect
+        self.client.on_message = on_message
+        self.client.reconnect_delay_set(1, 10)
+        self.client.connect_async(host, port, keepalive=30)
+        self.client.loop_start()
+
+    def _on_connect(self, client, userdata, flags, reason_code, properties):
+        self.connected = not reason_code.is_failure
+        if self.connected:
+            client.subscribe(GAME_TOPIC)
+        logger.info(f"MQTT {self.name}: connected to {self.host} ({reason_code})")
+
+    def _on_disconnect(self, client, userdata, flags, reason_code, properties):
+        if self.connected:
+            logger.warning(f"MQTT {self.name}: disconnected ({reason_code}); reconnecting")
+        self.connected = False
+
+    def stop(self):
+        self.client.loop_stop()
+        self.client.disconnect()
+
+
+def publish(topic: str, payload: str):
+    """Send on the local broker if it's up, else on hivemq. Returns the broker
+    name used, or None if neither is connected."""
+    for b in brokers:
+        if b.connected:
+            b.client.publish(topic, payload, qos=0)   # fire-and-forget: speed matters
+            return b.name
+    return None
+
+
+def broker_status() -> str:
+    return ", ".join(f"{b.name} {'up' if b.connected else 'DOWN'}" for b in brokers)
 
 
 def on_message(client, userdata, msg):
@@ -159,10 +199,7 @@ def display_loop():
     time.sleep(DISPLAY_PERIOD_S)
 
 
-def on_disconnect(client, userdata, flags, reason_code, properties):
-    global mqtt_connected
-    mqtt_connected = False
-    logger.warning(f"MQTT: disconnected ({reason_code}); reconnecting automatically")
+
 
 
 def imu_sample(t_ms: int, ax: float, ay: float, az: float, gx: float, gy: float, gz: float):
@@ -176,14 +213,13 @@ def imu_sample(t_ms: int, ax: float, ay: float, az: float, gx: float, gy: float,
     if event is not None and event["swing"] == 1:
         swings += 1
         payload = json.dumps(event)
-        if mqtt_connected:
-            client.publish(IMU_TOPIC, payload, qos=0)   # fire-and-forget: speed matters
+        via = publish(IMU_TOPIC, payload)
         logger.info(f"SWING #{swings}: accel {event['peak']:.2f} g, gyro {event['peak_gyro']} dps"
-                    f"{'' if mqtt_connected else ' (MQTT down, not sent)'}")
+                    f" -> {via or 'NOT SENT (no broker)'}")
     elif event is not None:
         rejected += 1
-        if mqtt_connected and REPORT_REJECTED:
-            client.publish(IMU_REJECTED_TOPIC, json.dumps(event), qos=0)
+        if REPORT_REJECTED:
+            publish(IMU_REJECTED_TOPIC, json.dumps(event))
         logger.info(f"rejected: accel {event['peak']:.2f} g, gyro {event['peak_gyro']} dps "
                     f"({', '.join(event['failed'])})")
 
@@ -195,8 +231,7 @@ def imu_sample(t_ms: int, ax: float, ay: float, az: float, gx: float, gy: float,
         raw_batch.append([round(now, 3), round(ax, 3), round(ay, 3), round(az, 3),
                           round(gx, 1), round(gy, 1), round(gz, 1)])
         if len(raw_batch) >= RAW_BATCH:
-            if mqtt_connected:
-                client.publish(IMU_RAW_TOPIC, json.dumps({"s": raw_batch}), qos=0)
+            publish(IMU_RAW_TOPIC, json.dumps({"s": raw_batch}))
             raw_batch.clear()
         if samples % 100 == 0:
             csv_file.flush()
@@ -206,7 +241,7 @@ def imu_sample(t_ms: int, ax: float, ay: float, az: float, gx: float, gy: float,
     mono = time.monotonic()
     if mono - rate_start >= STATUS_PERIOD_S:
         logger.info(f"status: {rate_samples / (mono - rate_start):5.1f} samples/s, "
-                    f"MQTT {'connected' if mqtt_connected else 'DISCONNECTED'}, "
+                    f"MQTT {broker_status()}, "
                     f"{swings} swings, {rejected} rejected so far")
         rate_samples, rate_start = 0, mono
 
@@ -219,12 +254,7 @@ def imu_status(text: str):
         last_status = text
 
 
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-client.on_connect = on_connect
-client.on_disconnect = on_disconnect
-client.on_message = on_message
-client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=30)
-client.loop_start()   # background thread; reconnects automatically
+brokers = [Broker("local", *LOCAL_BROKER), Broker("hivemq", *HIVEMQ_BROKER)]   # order = preference
 
 Bridge.provide("imu_sample", imu_sample)
 Bridge.provide("imu_status", imu_status)
@@ -232,7 +262,7 @@ Bridge.provide("imu_status", imu_status)
 try:
     App.run(user_loop=display_loop)
 finally:
-    client.loop_stop()
-    client.disconnect()
+    for b in brokers:
+        b.stop()
     if csv_file is not None:
         csv_file.close()
