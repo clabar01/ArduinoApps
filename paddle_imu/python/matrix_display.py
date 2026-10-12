@@ -17,9 +17,9 @@ game messages (ME193/CeciLaBarge/game) and asks it every ~50 ms what to draw:
   - READY          -> the serve countdown number ("count": 3, 2, 1)
   - EXTRA_LIFE     -> the countdown number ("count": 10..1) after a miss
   - WAITING        -> the level, e.g. "L1"
-  - MISS           -> the volley count of the rally that just ended (the game
-                      already reset its streak to 0, so the last count seen
-                      while PLAYING is shown)
+  - GAME_OVER      -> the final volley count ("final"; if missing, the last
+                      count seen while PLAYING, since the game already reset
+                      its streak to 0)
 
 Text up to 13 columns wide is shown still and centered; wider text (the IP)
 scrolls right to left.
@@ -125,7 +125,9 @@ class MatrixDisplay:
             return ("dot", scale(float(msg.get("x", 0.5)), COLS), scale(float(msg.get("y", 0.5)), ROWS))
         if state == "WAITING":
             return self._text_frame(f"L{msg.get('level', 0)}", now)
-        # MISS (streak already reset by the game): the rally's volley count
+        # GAME_OVER (streak already reset by the game): the rally's final volley count
+        if "final" in msg:
+            return self._text_frame(str(int(msg["final"])), now)
         return self._text_frame(str(max(self._last_streak, int(msg.get("streak", 0)))), now)
 
     @property
