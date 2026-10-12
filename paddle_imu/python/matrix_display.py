@@ -15,7 +15,7 @@ game messages (ME193/CeciLaBarge/game) and asks it every ~50 ms what to draw:
   - "flash" in the message -> that text, before anything else: S = SLOW-MO
                       or L = EXTRA LIFE card just activated, GO = serve
   - READY          -> the serve countdown number ("count": 3, 2, 1)
-  - EXTRA_LIFE     -> the countdown number ("count": 10..1) after a miss
+  - EXTRA_LIFE     -> the countdown number ("count": 5..1, EXTRA_LIFE_COUNTDOWN_S on the laptop) after a miss
   - WAITING        -> the level, e.g. "L1"
   - GAME_OVER      -> the final volley count ("final"; if missing, the last
                       count seen while PLAYING, since the game already reset
