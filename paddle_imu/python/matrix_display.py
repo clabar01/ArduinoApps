@@ -12,9 +12,10 @@ game messages (ME193/CeciLaBarge/game) and asks it every ~50 ms what to draw:
                       (my streak) for HIT_FLASH_S, while the ball flies away
                       to the opponent; then the dot again. (13 x 8 LEDs are
                       too few for digits and a moving dot at the same time.)
-  - "flash" in the message (a power-up card just activated) -> that letter:
-                      S = SLOW-MO, L = EXTRA LIFE (before anything else)
-  - EXTRA_LIFE     -> the countdown number ("count": 5..1) after a miss
+  - "flash" in the message -> that text, before anything else: S = SLOW-MO
+                      or L = EXTRA LIFE card just activated, GO = serve
+  - READY          -> the serve countdown number ("count": 3, 2, 1)
+  - EXTRA_LIFE     -> the countdown number ("count": 10..1) after a miss
   - WAITING        -> the level, e.g. "L1"
   - MISS           -> the volley count of the rally that just ended (the game
                       already reset its streak to 0, so the last count seen
@@ -49,6 +50,8 @@ _GLYPHS = {
     "I": ["###", ".#.", ".#.", ".#.", "###"],
     "P": ["##.", "#.#", "##.", "#..", "#.."],
     "S": ["###", "#..", "###", "..#", "###"],
+    "G": ["###", "#..", "#.#", "#.#", "###"],
+    "O": ["###", "#.#", "#.#", "#.#", "###"],
     "n": ["...", "##.", "#.#", "#.#", "#.#"],
     "o": ["...", ".#.", "#.#", "#.#", ".#."],
     ".": [".", ".", ".", ".", "#"],
@@ -108,8 +111,8 @@ class MatrixDisplay:
             return self._text_frame(ip_text, now)
         state = msg.get("state")
         if msg.get("flash"):                     # a power-up card just activated
-            return self._text_frame(str(msg["flash"])[:2], now)
-        if state == "EXTRA_LIFE":                # countdown after a miss
+            return self._text_frame(str(msg["flash"])[:3], now)
+        if state in ("EXTRA_LIFE", "READY"):     # extra-life / serve countdown
             return self._text_frame(str(msg.get("count", "")), now)
         if state == "PLAYING":
             streak = int(msg.get("streak", 0))
