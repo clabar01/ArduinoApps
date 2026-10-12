@@ -8,10 +8,14 @@ game messages (ME193/CeciLaBarge/game) and asks it every ~50 ms what to draw:
                       x 0..1 -> column 0..12 (left -> right),
                       y 0..1 -> row 0..7 (opponent's end at the top, mine at
                       the bottom: a view from above the table)
+                      ...except right after each of my hits: the volley count
+                      (my streak) for HIT_FLASH_S, while the ball flies away
+                      to the opponent; then the dot again. (13 x 8 LEDs are
+                      too few for digits and a moving dot at the same time.)
   - WAITING        -> the level, e.g. "L1"
-  - MISS / POINT   -> the streak of the rally that just ended or continues
-                      (in MISS the game already reset its streak to 0, so the
-                      last streak seen while PLAYING is shown)
+  - MISS           -> the volley count of the rally that just ended (the game
+                      already reset its streak to 0, so the last count seen
+                      while PLAYING is shown)
 
 Text up to 13 columns wide is shown still and centered; wider text (the IP)
 scrolls right to left.
@@ -20,6 +24,7 @@ from typing import Optional
 
 COLS, ROWS = 13, 8
 GAME_TIMEOUT_S = 3.0
+HIT_FLASH_S = 0.8        # volley count shown this long after each hit
 SCROLL_STEP_S = 0.12     # one column per step
 SCROLL_GAP = 4           # blank columns between repeats of scrolling text
 TEXT_TOP_ROW = 1         # 5-row font drawn on rows 1..5
@@ -84,6 +89,7 @@ class MatrixDisplay:
         self._msg: Optional[dict] = None
         self._msg_time: Optional[float] = None
         self._last_streak = 0      # streak seen while PLAYING
+        self._flash_until = 0.0    # show the volley count until then (after a hit)
         self._text = None          # text currently shown (for scrolling)
         self._scroll_start = 0.0
 
@@ -98,12 +104,17 @@ class MatrixDisplay:
             return self._text_frame(ip_text, now)
         state = msg.get("state")
         if state == "PLAYING":
-            self._last_streak = int(msg.get("streak", 0))
+            streak = int(msg.get("streak", 0))
+            if streak > self._last_streak:      # a hit: flash the new count
+                self._flash_until = now + HIT_FLASH_S
+            self._last_streak = streak
+            if now < self._flash_until:
+                return self._text_frame(str(streak), now)
             self._text = None
             return ("dot", scale(float(msg.get("x", 0.5)), COLS), scale(float(msg.get("y", 0.5)), ROWS))
         if state == "WAITING":
             return self._text_frame(f"L{msg.get('level', 0)}", now)
-        # MISS (streak already reset by the game) or POINT: the rally's streak
+        # MISS (streak already reset by the game): the rally's volley count
         return self._text_frame(str(max(self._last_streak, int(msg.get("streak", 0)))), now)
 
     @property
